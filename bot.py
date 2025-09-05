@@ -29,14 +29,14 @@ async def next_game(update: Update, context: ContextTypes.DEFAULT_TYPE):
             away_score = event.get("intAwayScore")
 
             if home_score is not None and away_score is not None:
-                score_msg = f"🏆 比分：{home_score} - {away_score}\n"
+                score_msg = f"比分：{away_score} - {home_score}\n"
             else:
                 score_msg = ""
 
             msg = (
-                f"🗓 日期: {date}\n"
-                f"⏰ 時間: {time} (UTC)"
-                f"🏠 {home} vs {away}\n"
+                f"日期: {date}\n"
+                f"時間: {time} (UTC)\n"
+                f"{away} vs {home}\n"
                 f"{score_msg}"
 
             )
