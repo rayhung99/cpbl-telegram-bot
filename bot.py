@@ -19,27 +19,12 @@ async def next_game(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         if data and "events" in data and data["events"]:
             event = data["events"][0]  # 只取最近一場
-
             home = event.get("strHomeTeam", "未知")
             away = event.get("strAwayTeam", "未知")
             date = event.get("dateEvent", "未知")
             time = event.get("strTime", "未知")
 
-            home_score = event.get("intHomeScore")
-            away_score = event.get("intAwayScore")
-
-            if home_score is not None and away_score is not None:
-                score_msg = f"🏆 比分：{home_score} - {away_score}\n"
-            else:
-                score_msg = ""
-
-            msg = (
-                f"📅 下一場比賽\n\n"
-                f"🏠 {home} vs {away}\n"
-                f"{score_msg}"
-                f"🗓 日期: {date}\n"
-                f"⏰ 時間: {time} (UTC)"
-            )
+            msg = f"📅 下一場比賽\n\n🏠 {home} vs {away}\n🗓 日期: {date}\n⏰ 時間: {time} (UTC)"
         else:
             msg = "目前查不到下一場比賽資訊 😢"
 
