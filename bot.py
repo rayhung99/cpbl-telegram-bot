@@ -4,20 +4,10 @@ import requests
 import os
 import re
 
-TOKEN = os.getenv("TOKEN")  # BotFather Token
-API_BASE = "https://www.thesportsdb.com/api/v1/json/123/eventsnext.php?id="
+TOKEN = os.getenv("TOKEN")  # Railway 環境變數
+API_BASE = "https://www.thesportsdb.com/api/v1/json/3/eventsnext.php?id={team_id}"
 
-# 隊伍資料 (ID + 中文名)
-TEAMS = {
-    "game1": {"id": "147333", "name": "台鋼雄鷹"},
-    "game2": {"id": "144298", "name": "中信兄弟"},
-    "game3": {"id": "144301", "name": "統一7-ELEVEN獅"},
-    "game4": {"id": "144300", "name": "樂天桃猿"},
-    "game5": {"id": "144299", "name": "富邦悍將"},
-    "game6": {"id": "144302", "name": "味全龍"},
-}
-
-# 英文隊名 → 中文對照
+# 英文隊名 → 中文
 TEAM_NAME_MAP = {
     "CTBC Brothers": "中信兄弟",
     "Uni-President 7-Eleven Lions": "統一7-ELEVEN獅",
@@ -27,98 +17,160 @@ TEAM_NAME_MAP = {
     "TSG Hawks": "台鋼雄鷹"
 }
 
+# 隊伍 ID
+TEAM_IDS = {
+    "CTBC Brothers": "144298",
+    "Uni-President 7-Eleven Lions": "144301",
+    "Rakuten Monkeys": "144300",
+    "Fubon Guardians": "144299",
+    "Wei Chuan Dragons": "144302",
+    "TSG Hawks": "147333"
+}
+
+
 # -------------------------
-# 解析 strResult
+# 解析比賽結果
 # -------------------------
 def parse_str_result(str_result: str) -> str:
+    # HTML 清理
     readable = re.sub(r'<br\s*/?>', '\n', str_result)
     readable = re.sub(r'&nbsp;', ' ', readable)
+
     blocks = [b.strip() for b in readable.strip().split('\n\n') if b.strip()]
-    results = []
+    team_data = []
 
     for block in blocks:
-        lines = block.split('\n')
-        if len(lines) < 2:
+        lines = [l.strip() for l in block.split('\n') if l.strip()]
+        if not lines:
             continue
-        team_name = TEAM_NAME_MAP.get(lines[0].strip(), lines[0].strip())
-        scores = lines[1].strip()
-        hits_errors = "\n".join(
-            l.strip() for l in lines[2:] if "Hits" in l or "Errors" in l
-        )
-        results.append(f"{team_name}\n局分: {scores}\n{hits_errors}".strip())
 
-    return "\n\n".join(results)
+        # 隊伍名稱 (去掉 "Innings:")
+        team_name_raw = re.sub(r"\s*Innings:.*$", "", lines[0])
+        team_name = TEAM_NAME_MAP.get(team_name_raw, team_name_raw)
 
-# 查詢比賽資訊
-async def fetch_next_game(team_key: str) -> str:
+        scores = []
+        hits = 0
+        errors = 0
+
+        for l in lines[1:]:
+            if l.startswith("Hits"):
+                hits = int(re.search(r"(\d+)", l).group(1))
+            elif l.startswith("Errors"):
+                errors = int(re.search(r"(\d+)", l).group(1))
+            elif re.match(r"^[0-9\s]+$", l):  # 純數字行 (局分)
+                scores = [int(x) for x in l.split() if x.isdigit()]
+
+        # 補滿 9 局
+        while len(scores) < 9:
+            scores.append("-")
+
+        # 計算總分 R (跳過 "-")
+        runs = sum(s for s in scores if isinstance(s, int))
+
+        team_data.append({
+            "name": team_name,
+            "scores": scores,
+            "R": runs,
+            "H": hits,
+            "E": errors
+        })
+
+    # 格式化成總表
+    header = "1 2 3 4 5 6 7 8 9 | R  H  E"
+    lines = [header]
+    for t in team_data:
+        scores_str = " ".join(str(s) for s in t["scores"])
+        line = f"{scores_str} | {t['R']}  {t['H']}  {t['E']}   {t['name']}"
+        lines.append(line)
+
+    return "\n".join(lines)
+
+
+# -------------------------
+# Bot 指令
+# -------------------------
+
+# /start 指令
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "哈囉！⚾\n"
+        "輸入 /game <隊伍名稱> 就能查詢下一場比賽。\n"
+        "例如：\n"
+        "/game 中信兄弟\n"
+        "/game 台鋼雄鷹"
+    )
+
+
+# /game 指令
+async def game(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.args:
+        await update.message.reply_text("請輸入隊伍名稱，例如：/game 中信兄弟")
+        return
+
+    team_name_input = " ".join(context.args).strip()
+
+    # 找英文隊伍 key
+    team_id = None
+    team_eng = None
+    for eng, zh in TEAM_NAME_MAP.items():
+        if team_name_input in (zh, eng):
+            team_id = TEAM_IDS[eng]
+            team_eng = eng
+            break
+
+    if not team_id:
+        await update.message.reply_text("⚠️ 找不到該隊伍，請確認名稱是否正確。")
+        return
+
     try:
-        team = TEAMS[team_key]
-        team_id, team_name = team["id"], team["name"]
-
-        response = requests.get(API_BASE + team_id, timeout=10)
-        response.raise_for_status()
+        response = requests.get(API_BASE.format(team_id=team_id))
         data = response.json()
 
-        if not data.get("events"):
-            return f"{team_name} 目前查不到下一場比賽資訊 😢"
+        if data and "events" in data and data["events"]:
+            event = data["events"][0]
 
-        event = data["events"][0]
-        home = TEAM_NAME_MAP.get(event.get("strHomeTeam", "未知"), event.get("strHomeTeam", "未知"))
-        away = TEAM_NAME_MAP.get(event.get("strAwayTeam", "未知"), event.get("strAwayTeam", "未知"))
-        date = event.get("dateEventLocal", "未知")
-        time = event.get("strTimeLocal", "未知")
-        str_result = event.get("strResult")
+            home = TEAM_NAME_MAP.get(event.get("strHomeTeam", "未知"), event.get("strHomeTeam", "未知"))
+            away = TEAM_NAME_MAP.get(event.get("strAwayTeam", "未知"), event.get("strAwayTeam", "未知"))
+            date = event.get("dateEventLocal", "未知")
+            time = event.get("strTimeLocal", "未知")
 
-        if not str_result:
-            status = "尚未開打"
-            score_info = f"{away} vs {home}"
+            str_result = event.get("strResult")
+            if str_result:
+                detailed_info = parse_str_result(str_result)
+                status = "已結束或進行中"
+            else:
+                detailed_info = "目前尚無比分資訊"
+                status = "尚未開打"
+
+            msg = (
+                f"隊伍: {team_name_input}\n"
+                f"日期: {date}\n"
+                f"時間: {time}\n"
+                f"狀態: {status}\n"
+                f"{away} vs {home}\n\n"
+                f"{detailed_info}"
+            )
         else:
-            status = "已結束或進行中"
-            score_info = parse_str_result(str_result)
-
-        return (
-            f"隊伍: {team_name}\n"
-            f"日期: {date}\n"
-            f"時間: {time}\n"
-            f"狀態: {status}\n"
-            f"{score_info}"
-        )
+            msg = "目前查不到比賽資訊 😢"
 
     except Exception as e:
-        return f"⚠️ 發生錯誤: {e}"
+        msg = f"⚠️ 錯誤: {e}"
 
-# 單隊指令
-async def game1(update: Update, context: ContextTypes.DEFAULT_TYPE): await update.message.reply_text(await fetch_next_game("game1"))
-async def game2(update: Update, context: ContextTypes.DEFAULT_TYPE): await update.message.reply_text(await fetch_next_game("game2"))
-async def game3(update: Update, context: ContextTypes.DEFAULT_TYPE): await update.message.reply_text(await fetch_next_game("game3"))
-async def game4(update: Update, context: ContextTypes.DEFAULT_TYPE): await update.message.reply_text(await fetch_next_game("game4"))
-async def game5(update: Update, context: ContextTypes.DEFAULT_TYPE): await update.message.reply_text(await fetch_next_game("game5"))
-async def game6(update: Update, context: ContextTypes.DEFAULT_TYPE): await update.message.reply_text(await fetch_next_game("game6"))
+    await update.message.reply_text(msg)
 
-# 全部隊伍指令
-async def allgames(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    messages = []
-    for key in TEAMS.keys():
-        result = await fetch_next_game(key)
-        messages.append(result)
-    await update.message.reply_text("\n\n---\n\n".join(messages))
 
+# -------------------------
+# 主程式
+# -------------------------
 def main():
     app = Application.builder().token(TOKEN).build()
 
-    # 註冊單隊指令
-    app.add_handler(CommandHandler("game1", game1))
-    app.add_handler(CommandHandler("game2", game2))
-    app.add_handler(CommandHandler("game3", game3))
-    app.add_handler(CommandHandler("game4", game4))
-    app.add_handler(CommandHandler("game5", game5))
-    app.add_handler(CommandHandler("game6", game6))
-
-    # 註冊全部隊伍
-    app.add_handler(CommandHandler("allgames", allgames))
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("game", game))
 
     print("🚀 Bot 已啟動！")
     app.run_polling()
+
 
 if __name__ == "__main__":
     main()
