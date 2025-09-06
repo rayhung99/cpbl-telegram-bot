@@ -2,6 +2,7 @@ from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 import requests
 import os
+import re
 
 TOKEN = os.getenv("TOKEN")  # Railway 環境變數裡的 BotFather Token
 TEAM_ID = "147333"  # 固定隊伍 ID
