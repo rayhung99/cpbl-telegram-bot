@@ -30,7 +30,7 @@ def parse_strResult(str_result):
     for t in teams_data:
         lines = t.strip().split('\n')
         if len(lines) >= 2:
-            team_name = team_name_map.get(lines[0].strip(), lines[0].strip())
+            team_name = TEAM_NAME_MAP.get(lines[0].strip(), lines[0].strip())
             scores = lines[1].strip()
             hits_errors = ""
             for line in lines[2:]:
