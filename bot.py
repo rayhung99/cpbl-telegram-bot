@@ -17,6 +17,28 @@ TEAM_NAME_MAP = {
     "TSG Hawks": "台鋼雄鷹"
 }
 
+# -------------------------
+# 解析 strResult
+# -------------------------
+def parse_strResult(str_result):
+    readable_result = re.sub(r'<br\s*/?>', '\n', str_result)
+    readable_result = re.sub(r'&nbsp;', ' ', readable_result)
+    teams_data = readable_result.strip().split('\n\n')
+    team_results = []
+
+    for t in teams_data:
+        lines = t.strip().split('\n')
+        if len(lines) >= 2:
+            team_name = team_name_map.get(lines[0].strip(), lines[0].strip())
+            scores = lines[1].strip()
+            hits_errors = ""
+            for line in lines[2:]:
+                if "Hits" in line or "Errors" in line:
+                    hits_errors += line.strip() + "\n"
+            hits_errors = hits_errors.strip()
+            team_results.append(f"{team_name}\n局分: {scores}\n{hits_errors}")
+    return "\n\n".join(team_results)
+
 # /start 指令
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("哈囉！輸入 /nextgame 就能查詢下一場比賽 ⚾")
@@ -35,6 +57,18 @@ async def next_game(update: Update, context: ContextTypes.DEFAULT_TYPE):
             date = event.get("dateEventLocal", "未知")
             time = event.get("strTimeLocal", "未知")
 
+            # 使用 strResult 解析局分、安打、失誤
+            str_result = event.get("strResult")
+            if str_result:
+             detailed_info = parse_strResult(str_result)
+            else:
+             # 若沒有 strResult，就用簡單比分
+             home_score = event.get("intHomeScore", "-")
+             away_score = event.get("intAwayScore", "-")
+             detailed_info = f"{away_score} - {home_score}"
+
+
+
             # 英文轉中文
             home = TEAM_NAME_MAP.get(home, home)
             away = TEAM_NAME_MAP.get(away, away)
@@ -49,8 +83,9 @@ async def next_game(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             msg = (
                 f"日期: {date}\n"
-                f"時間: {time} (UTC)\n"
+                f"時間: {time}\n"
                 f"{away} vs {home}\n"
+                f"{detailed_info}\n"
                 f"{score_msg}"
             )
         else:
