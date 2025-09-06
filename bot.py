@@ -5,7 +5,7 @@ import os
 import re
 
 TOKEN = os.getenv("TOKEN")  # Railway 環境變數
-API_BASE = "https://www.thesportsdb.com/api/v1/json/3/eventsnext.php?id={team_id}"
+API_BASE = "https://www.thesportsdb.com/api/v1/json/123/eventsnext.php?id={team_id}"
 
 # 英文隊名 → 中文
 TEAM_NAME_MAP = {
@@ -25,6 +25,16 @@ TEAM_IDS = {
     "Fubon Guardians": "144299",
     "Wei Chuan Dragons": "144302",
     "TSG Hawks": "147333"
+}
+
+# gameX 對應表
+GAME_COMMANDS = {
+    "game1": "TSG Hawks",
+    "game2": "CTBC Brothers",
+    "game3": "Uni-President 7-Eleven Lions",
+    "game4": "Rakuten Monkeys",
+    "game5": "Fubon Guardians",
+    "game6": "Wei Chuan Dragons"
 }
 
 
@@ -57,14 +67,14 @@ def parse_str_result(str_result: str) -> str:
                 hits = int(re.search(r"(\d+)", l).group(1))
             elif l.startswith("Errors"):
                 errors = int(re.search(r"(\d+)", l).group(1))
-            elif re.match(r"^[0-9\s]+$", l):  # 純數字行 (局分)
+            elif re.match(r"^[0-9\s]+$", l):  # 局分數字
                 scores = [int(x) for x in l.split() if x.isdigit()]
 
         # 補滿 9 局
         while len(scores) < 9:
             scores.append("-")
 
-        # 計算總分 R (跳過 "-")
+        # 計算總分 R
         runs = sum(s for s in scores if isinstance(s, int))
 
         team_data.append({
@@ -75,7 +85,7 @@ def parse_str_result(str_result: str) -> str:
             "E": errors
         })
 
-    # 格式化成總表
+    # 總表格式
     header = "1 2 3 4 5 6 7 8 9 | R  H  E"
     lines = [header]
     for t in team_data:
@@ -94,33 +104,20 @@ def parse_str_result(str_result: str) -> str:
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "哈囉！⚾\n"
-        "輸入 /game <隊伍名稱> 就能查詢下一場比賽。\n"
-        "例如：\n"
-        "/game 中信兄弟\n"
-        "/game 台鋼雄鷹"
+        "以下指令可查詢比賽：\n"
+        "/game1 - 台鋼雄鷹\n"
+        "/game2 - 中信兄弟\n"
+        "/game3 - 統一7-ELEVEN獅\n"
+        "/game4 - 樂天桃猿\n"
+        "/game5 - 富邦悍將\n"
+        "/game6 - 味全龍"
     )
 
 
-# /game 指令
-async def game(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not context.args:
-        await update.message.reply_text("請輸入隊伍名稱，例如：/game 中信兄弟")
-        return
-
-    team_name_input = " ".join(context.args).strip()
-
-    # 找英文隊伍 key
-    team_id = None
-    team_eng = None
-    for eng, zh in TEAM_NAME_MAP.items():
-        if team_name_input in (zh, eng):
-            team_id = TEAM_IDS[eng]
-            team_eng = eng
-            break
-
-    if not team_id:
-        await update.message.reply_text("⚠️ 找不到該隊伍，請確認名稱是否正確。")
-        return
+# 查詢指定隊伍比賽
+async def fetch_game(update: Update, context: ContextTypes.DEFAULT_TYPE, team_eng: str):
+    team_id = TEAM_IDS[team_eng]
+    team_zh = TEAM_NAME_MAP[team_eng]
 
     try:
         response = requests.get(API_BASE.format(team_id=team_id))
@@ -143,7 +140,7 @@ async def game(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 status = "尚未開打"
 
             msg = (
-                f"隊伍: {team_name_input}\n"
+                f"隊伍: {team_zh}\n"
                 f"日期: {date}\n"
                 f"時間: {time}\n"
                 f"狀態: {status}\n"
@@ -159,6 +156,14 @@ async def game(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(msg)
 
 
+# 建立 /gameX handler
+def add_game_handlers(app):
+    for cmd, team_eng in GAME_COMMANDS.items():
+        async def handler(update: Update, context: ContextTypes.DEFAULT_TYPE, team=team_eng):
+            await fetch_game(update, context, team)
+        app.add_handler(CommandHandler(cmd, handler))
+
+
 # -------------------------
 # 主程式
 # -------------------------
@@ -166,7 +171,7 @@ def main():
     app = Application.builder().token(TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("game", game))
+    add_game_handlers(app)
 
     print("🚀 Bot 已啟動！")
     app.run_polling()
