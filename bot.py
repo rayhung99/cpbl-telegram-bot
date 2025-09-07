@@ -4,10 +4,13 @@ import requests
 import os
 import re
 
-TOKEN = os.getenv("TOKEN")  # Railway 環境變數
+# Railway 環境變數裡的 BotFather Token
+TOKEN = os.getenv("TOKEN")
+
+# API URL
 API_BASE = "https://www.thesportsdb.com/api/v1/json/123/eventsnext.php?id={team_id}"
 
-# 英文隊名 → 中文
+# 英文隊名 → 中文對照
 TEAM_NAME_MAP = {
     "CTBC Brothers": "中信兄弟",
     "Uni-President 7-Eleven Lions": "統一7-ELEVEN獅",
@@ -17,29 +20,19 @@ TEAM_NAME_MAP = {
     "TSG Hawks": "台鋼雄鷹"
 }
 
-# 隊伍 ID
+# TheSportsDB 隊伍 ID
 TEAM_IDS = {
-    "CTBC Brothers": "144298",
-    "Uni-President 7-Eleven Lions": "144301",
-    "Rakuten Monkeys": "144300",
-    "Fubon Guardians": "144299",
-    "Wei Chuan Dragons": "144302",
-    "TSG Hawks": "147333"
-}
-
-# gameX 對應表
-GAME_COMMANDS = {
-    "game1": "TSG Hawks",
-    "game2": "CTBC Brothers",
-    "game3": "Uni-President 7-Eleven Lions",
-    "game4": "Rakuten Monkeys",
-    "game5": "Fubon Guardians",
-    "game6": "Wei Chuan Dragons"
+    "game1": "147333",  # 台鋼雄鷹
+    "game2": "144298",  # 中信兄弟
+    "game3": "144301",  # 統一7-ELEVEN獅
+    "game4": "144300",  # 樂天桃猿
+    "game5": "144299",  # 富邦悍將
+    "game6": "144302",  # 味全龍
 }
 
 
 # -------------------------
-# 解析比賽結果
+# 解析 strResult → 表格
 # -------------------------
 def parse_str_result(str_result: str) -> str:
     # HTML 清理
@@ -63,10 +56,12 @@ def parse_str_result(str_result: str) -> str:
         errors = 0
 
         for l in lines[1:]:
-            if l.startswith("Hits"):
-                hits = int(re.search(r"(\d+)", l).group(1))
-            elif l.startswith("Errors"):
-                errors = int(re.search(r"(\d+)", l).group(1))
+            if l.lower().startswith("hits") or l.lower().startswith("h"):
+                m = re.search(r"(\d+)", l)
+                hits = int(m.group(1)) if m else 0
+            elif l.lower().startswith("errors") or l.lower().startswith("e"):
+                m = re.search(r"(\d+)", l)
+                errors = int(m.group(1)) if m else 0
             elif re.match(r"^[0-9\s]+$", l):  # 局分數字
                 scores = [int(x) for x in l.split() if x.isdigit()]
 
@@ -97,14 +92,12 @@ def parse_str_result(str_result: str) -> str:
 
 
 # -------------------------
-# Bot 指令
+# 指令處理
 # -------------------------
-
-# /start 指令
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "哈囉！⚾\n"
-        "以下指令可查詢比賽：\n"
+    msg = (
+        "哈囉！⚾\n\n"
+        "使用以下指令查詢比賽：\n"
         "/game1 - 台鋼雄鷹\n"
         "/game2 - 中信兄弟\n"
         "/game3 - 統一7-ELEVEN獅\n"
@@ -112,40 +105,43 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/game5 - 富邦悍將\n"
         "/game6 - 味全龍"
     )
+    await update.message.reply_text(msg)
 
 
-# 查詢指定隊伍比賽
-async def fetch_game(update: Update, context: ContextTypes.DEFAULT_TYPE, team_eng: str):
-    team_id = TEAM_IDS[team_eng]
-    team_zh = TEAM_NAME_MAP[team_eng]
+async def game_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    command = update.message.text.lstrip("/")  # 例如 "game1"
+    team_id = TEAM_IDS.get(command)
+
+    if not team_id:
+        await update.message.reply_text("❌ 找不到這支隊伍，請確認指令是否正確")
+        return
+
+    api_url = API_BASE.format(team_id=team_id)
 
     try:
-        response = requests.get(API_BASE.format(team_id=team_id))
+        response = requests.get(api_url)
         data = response.json()
 
         if data and "events" in data and data["events"]:
-            event = data["events"][0]
+            event = data["events"][0]  # 最近一場
 
-            home = TEAM_NAME_MAP.get(event.get("strHomeTeam", "未知"), event.get("strHomeTeam", "未知"))
-            away = TEAM_NAME_MAP.get(event.get("strAwayTeam", "未知"), event.get("strAwayTeam", "未知"))
+            home = TEAM_NAME_MAP.get(event.get("strHomeTeam", "未知"), "未知")
+            away = TEAM_NAME_MAP.get(event.get("strAwayTeam", "未知"), "未知")
             date = event.get("dateEventLocal", "未知")
             time = event.get("strTimeLocal", "未知")
 
+            # 分數資訊
             str_result = event.get("strResult")
             if str_result:
-                detailed_info = parse_str_result(str_result)
-                status = "已結束或進行中"
+                score_table = parse_str_result(str_result)
             else:
-                detailed_info = "目前尚無比分資訊"
-                status = "尚未開打"
+                score_table = "尚無比賽結果"
 
             msg = (
-                f"隊伍: {team_zh}\n"
                 f"日期: {date}\n"
                 f"時間: {time}\n"
-                f"狀態: {status}\n"
                 f"{away} vs {home}\n\n"
-                f"{detailed_info}"
+                f"{score_table}"
             )
         else:
             msg = "目前查不到比賽資訊 😢"
@@ -156,22 +152,16 @@ async def fetch_game(update: Update, context: ContextTypes.DEFAULT_TYPE, team_en
     await update.message.reply_text(msg)
 
 
-# 建立 /gameX handler
-def add_game_handlers(app):
-    for cmd, team_eng in GAME_COMMANDS.items():
-        async def handler(update: Update, context: ContextTypes.DEFAULT_TYPE, team=team_eng):
-            await fetch_game(update, context, team)
-        app.add_handler(CommandHandler(cmd, handler))
-
-
 # -------------------------
 # 主程式
 # -------------------------
 def main():
     app = Application.builder().token(TOKEN).build()
 
+    # 指令註冊
     app.add_handler(CommandHandler("start", start))
-    add_game_handlers(app)
+    for cmd in TEAM_IDS.keys():
+        app.add_handler(CommandHandler(cmd, game_handler))
 
     print("🚀 Bot 已啟動！")
     app.run_polling()
