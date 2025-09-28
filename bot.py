@@ -7,9 +7,11 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
+import os
 
-# Telegram Token
-TOKEN = "<YOUR_BOT_TOKEN>"
+TOKEN = os.getenv("TOKEN")
+if not TOKEN:
+    raise ValueError("❌ Telegram Token 未設定，請在 Railway 環境變數中設定 TOKEN")
 
 # gameX 對應隊伍
 GAME_TEAMS = {
