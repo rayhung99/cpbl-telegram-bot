@@ -1,155 +1,116 @@
+import time
+from datetime import datetime
+from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
-import requests
-import os
-import re
 
-# Railway 環境變數裡的 BotFather Token
-TOKEN = os.getenv("TOKEN")
+# Telegram Token
+TOKEN = "<YOUR_BOT_TOKEN>"
 
-# API URL
-API_BASE = "https://www.thesportsdb.com/api/v1/json/123/eventsnext.php?id={team_id}"
-
-# 英文隊名 → 中文對照
-TEAM_NAME_MAP = {
-    "CTBC Brothers": "中信兄弟",
-    "Uni-President 7-Eleven Lions": "統一7-ELEVEN獅",
-    "Rakuten Monkeys": "樂天桃猿",
-    "Fubon Guardians": "富邦悍將",
-    "Wei Chuan Dragons": "味全龍",
-    "TSG Hawks": "台鋼雄鷹"
-}
-
-# TheSportsDB 隊伍 ID
-TEAM_IDS = {
-    "game1": "147333",  # 台鋼雄鷹
-    "game2": "144298",  # 中信兄弟
-    "game3": "144301",  # 統一7-ELEVEN獅
-    "game4": "144300",  # 樂天桃猿
-    "game5": "144299",  # 富邦悍將
-    "game6": "144302",  # 味全龍
+# gameX 對應隊伍
+GAME_TEAMS = {
+    "game1": "台鋼雄鷹",
+    "game2": "中信兄弟",
+    "game3": "統一7-ELEVEN獅",
+    "game4": "樂天桃猿",
+    "game5": "富邦悍將",
+    "game6": "味全龍"
 }
 
 
 # -------------------------
-# 解析 strResult → 表格
+# Selenium 抓比賽
 # -------------------------
-def parse_str_result(str_result: str) -> str:
-    # HTML 清理
-    readable = re.sub(r'<br\s*/?>', '\n', str_result)
-    readable = re.sub(r'&nbsp;', ' ', readable)
-
-    blocks = [b.strip() for b in readable.strip().split('\n\n') if b.strip()]
-    team_data = []
-
-    for block in blocks:
-        lines = [l.strip() for l in block.split('\n') if l.strip()]
-        if not lines:
-            continue
-
-        # 隊伍名稱 (去掉 "Innings:")
-        team_name_raw = re.sub(r"\s*Innings:.*$", "", lines[0])
-        team_name = TEAM_NAME_MAP.get(team_name_raw, team_name_raw)
-
-        scores = []
-        hits = 0
-        errors = 0
-
-        for l in lines[1:]:
-            if l.lower().startswith("hits") or l.lower().startswith("h"):
-                m = re.search(r"(\d+)", l)
-                hits = int(m.group(1)) if m else 0
-            elif l.lower().startswith("errors") or l.lower().startswith("e"):
-                m = re.search(r"(\d+)", l)
-                errors = int(m.group(1)) if m else 0
-            elif re.match(r"^[0-9\s]+$", l):  # 局分數字
-                scores = [int(x) for x in l.split() if x.isdigit()]
-
-        # 補滿 9 局
-        while len(scores) < 9:
-            scores.append("-")
-
-        # 計算總分 R
-        runs = sum(s for s in scores if isinstance(s, int))
-
-        team_data.append({
-            "name": team_name,
-            "scores": scores,
-            "R": runs,
-            "H": hits,
-            "E": errors
-        })
-
-    # 總表格式
-    header = "1 2 3 4 5 6 7 8 9 | R  H  E"
-    lines = [header]
-    for t in team_data:
-        scores_str = " ".join(str(s) for s in t["scores"])
-        line = f"{scores_str} | {t['R']}  {t['H']}  {t['E']}   {t['name']}"
-        lines.append(line)
-
-    return "\n".join(lines)
+def fetch_cpbl_games():
+    url = "https://www.cpbl.com.tw"
+    opts = Options()
+    opts.add_argument("--headless")
+    opts.add_argument("--no-sandbox")
+    opts.add_argument("--disable-dev-shm-usage")
+    opts.add_argument("--window-size=1920,1080")
+    driver = webdriver.Chrome(options=opts)
+    games = []
+    try:
+        driver.get(url)
+        WebDriverWait(driver, 10).until(
+            EC.presence_of_element_located((By.CLASS_NAME, "game_item"))
+        )
+        js = """
+        function getStatus(el){
+            if(el.classList.contains('final')) return '✅ 已結束';
+            if(el.classList.contains('live')) return '🔴 進行中';
+            if(el.classList.contains('canceled')) return '❌ 取消';
+            return '⏰ 未開始';
+        }
+        const games = [...document.querySelectorAll('.game_item'), ...document.querySelectorAll('.game_canceled')];
+        return games.map(g=>{
+            const teams = g.querySelectorAll('.team_name');
+            const scores = g.querySelectorAll('.score');
+            return {
+                away_team: teams[0]?.textContent?.trim() || '',
+                home_team: teams[1]?.textContent?.trim() || '',
+                away_score: scores[0]?.textContent?.trim() || '0',
+                home_score: scores[1]?.textContent?.trim() || '0',
+                status: getStatus(g),
+                inning: g.querySelector('.inning')?.textContent?.trim() || '',
+                game_time: g.querySelector('.game_time')?.textContent?.trim() || '',
+                game_link: g.querySelector('a')?.href || ''
+            };
+        });
+        """
+        games = driver.execute_script(js)
+    except Exception as e:
+        print("抓取失敗:", e)
+    finally:
+        driver.quit()
+    return games
 
 
 # -------------------------
-# 指令處理
+# Bot 指令
 # -------------------------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    msg = (
-        "哈囉！⚾\n\n"
-        "使用以下指令查詢比賽：\n"
-        "/game1 - 台鋼雄鷹\n"
-        "/game2 - 中信兄弟\n"
-        "/game3 - 統一7-ELEVEN獅\n"
-        "/game4 - 樂天桃猿\n"
-        "/game5 - 富邦悍將\n"
-        "/game6 - 味全龍"
-    )
+    msg = "哈囉！⚾\n\n使用以下指令查詢比賽：\n"
+    for cmd, team in GAME_TEAMS.items():
+        msg += f"/{cmd} - {team}\n"
     await update.message.reply_text(msg)
 
 
 async def game_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    command = update.message.text.lstrip("/")  # 例如 "game1"
-    team_id = TEAM_IDS.get(command)
-
-    if not team_id:
-        await update.message.reply_text("❌ 找不到這支隊伍，請確認指令是否正確")
+    command = update.message.text.lstrip("/")
+    team_name = GAME_TEAMS.get(command)
+    if not team_name:
+        await update.message.reply_text("❌ 找不到這支隊伍")
         return
 
-    api_url = API_BASE.format(team_id=team_id)
+    await update.message.reply_text("⏳ 正在抓取比賽資料，請稍候…")
 
-    try:
-        response = requests.get(api_url)
-        data = response.json()
+    games = fetch_cpbl_games()
+    if not games:
+        await update.message.reply_text("⚠️ 無法取得比賽資料")
+        return
 
-        if data and "events" in data and data["events"]:
-            event = data["events"][0]  # 最近一場
-
-            home = TEAM_NAME_MAP.get(event.get("strHomeTeam", "未知"), "未知")
-            away = TEAM_NAME_MAP.get(event.get("strAwayTeam", "未知"), "未知")
-            date = event.get("dateEventLocal", "未知")
-            time = event.get("strTimeLocal", "未知")
-
-            # 分數資訊
-            str_result = event.get("strResult")
-            if str_result:
-                score_table = parse_str_result(str_result)
-            else:
-                score_table = "尚無比賽結果"
-
+    # 找指定隊伍的比賽
+    for game in games:
+        if team_name in [game.get("home_team"), game.get("away_team")]:
+            away = game.get("away_team", "")
+            home = game.get("home_team", "")
+            status = game.get("status", "")
+            link = game.get("game_link", "")
             msg = (
-                f"日期: {date}\n"
-                f"時間: {time}\n"
-                f"{away} vs {home}\n\n"
-                f"{score_table}"
+                f"{away} vs {home}\n"
+                f"狀態: {status}\n"
+                f"連結: {link}\n\n"
+                f"比分: {game.get('away_score')} - {game.get('home_score')}"
             )
-        else:
-            msg = "目前查不到比賽資訊 😢"
+            await update.message.reply_text(msg)
+            return
 
-    except Exception as e:
-        msg = f"⚠️ 錯誤: {e}"
-
-    await update.message.reply_text(msg)
+    await update.message.reply_text("今天沒有這支隊伍的比賽 😢")
 
 
 # -------------------------
@@ -157,10 +118,8 @@ async def game_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # -------------------------
 def main():
     app = Application.builder().token(TOKEN).build()
-
-    # 指令註冊
     app.add_handler(CommandHandler("start", start))
-    for cmd in TEAM_IDS.keys():
+    for cmd in GAME_TEAMS.keys():
         app.add_handler(CommandHandler(cmd, game_handler))
 
     print("🚀 Bot 已啟動！")
