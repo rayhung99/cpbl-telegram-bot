@@ -1,7 +1,7 @@
 import os
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
-from playwright.sync_api import sync_playwright
+from playwright.sync_api import sync_playwright, TimeoutError
 
 # -------------------------
 # Telegram Token
@@ -21,7 +21,7 @@ GAME_TEAMS = {
 }
 
 # -------------------------
-# Playwright 抓比賽
+# 抓取 CPBL 比賽
 # -------------------------
 def fetch_cpbl_games():
     url = "https://www.cpbl.com.tw"
@@ -29,8 +29,10 @@ def fetch_cpbl_games():
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         page = browser.new_page()
-        page.goto(url, timeout=15000)
+        page.goto(url)
         try:
+            # 等待比賽元素，最多 10 秒
+            page.wait_for_selector(".game_item, .game_canceled", timeout=10000)
             games = page.eval_on_selector_all(
                 ".game_item, .game_canceled",
                 """
@@ -52,9 +54,12 @@ def fetch_cpbl_games():
                 })
                 """
             )
+        except TimeoutError:
+            print("抓取比賽元素超時")
         except Exception as e:
-            print("抓取失敗:", e)
-        browser.close()
+            print("抓取比賽時出錯:", e)
+        finally:
+            browser.close()
     return games
 
 # -------------------------
@@ -76,7 +81,7 @@ async def game_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ 找不到這支隊伍")
         return
 
-    await update.message.reply_text("⏳ 正在抓取比賽資料，請稍候…")
+    await update.message.reply_text("⏳ 正在抓取比賽資料… (最多等待 10 秒)")
 
     games = fetch_cpbl_games()
     if not games:
